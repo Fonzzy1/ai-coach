@@ -361,7 +361,7 @@ def find_most_spaced_strings_matrix(strings_lists):
     best_distance = -1
 
     for strings in strings_lists:
-        total_distance = calulate_spacing(strings)
+        total_distance = calculate_spacing(strings)
         if total_distance > best_distance:
             best_distance = total_distance
             best_list = strings
@@ -372,9 +372,10 @@ def find_most_spaced_strings_matrix(strings_lists):
 if __name__ == "__main__":
     r = Requirements()
     # Hockey Training
-    r.add_fixed_event("TUE", "PM", "Hockey", "Training", "100")
-    r.add_fixed_event("WED", "PM", "Hockey", "Training", "50")
+    r.add_fixed_event("TUE", "PM", "Hockey", "Training", "150")
+    r.add_fixed_event("WED", "PM", "Hockey", "Training", "100")
     r.add_fixed_event("THU", "PM", "Hockey", "Training", "150")
+    r.add_fixed_event("THU", "PM", "Hockey", "Training", "100")
     # Park Run
     r.add_fixed_event("SAT", "AM", "Run", "Parkrun", "50")
 
@@ -383,20 +384,19 @@ if __name__ == "__main__":
     r.add_additional_event("Run", "Tempo", "100")
     r.add_additional_event("Run", "Long", "200")
     r.add_additional_event("Run", "Recovery", "50")
-    # r.add_additional_event("Run", "Recovery", "50")
+    r.add_additional_event("Run", "Recovery", "50")
 
     # Strength
-    r.add_additional_event("Strength", "Full Body Lift", "100")
-    r.add_additional_event("Strength", "Full Body Lift", "100")
-    r.add_additional_event("Strength", "Full Body Lift", "100")
+    r.add_additional_event("Strength", "Full Body Lift", "30")
+    r.add_additional_event("Strength", "Full Body Lift", "30")
+    r.add_additional_event("Strength", "Full Body Lift", "30")
 
     # Rules
     r.add_rule("Only One Run per Day")
     r.add_rule("space out my easy days")
 
     # Day types
-    r.add_day_type("Hard", "4", "250")
-    r.add_day_type("Easy", "2", "100")
+    r.add_day_type("Training", "6", "300")
     s = build_schedule(r)
 
     get_intentsities(s[0])
