@@ -232,26 +232,46 @@ def build_schedule(reqs: Requirements):
 
     if len(legal_plans) == 0:
         raise Exception("No valid plans found")
-    max_spacing = max(
-        legal_plans,
-        key=lambda x: calculate_spacing(
-            [x[day][time]["type"] for day in x for time in ["AM", "PM"]]
-        ),
-    )
-    max_spacing_value = calculate_spacing(
-        [max_spacing[day][time]["type"] for day in max_spacing for time in ["AM", "PM"]]
-    )
+    # We then want to maximise the spacing of intensity from each type
+    best_plan = max(legal_plans, key=lambda x: plan_score(x))
+    return best_plan
 
-    # get all plans with maximum spacing
-    max_plans = [
-        plan
-        for plan in legal_plans
-        if calculate_spacing(
-            [plan[day][time]["type"] for day in plan for time in ["AM", "PM"]]
-        )
-        == max_spacing_value
-    ]
-    return max_plans
+
+def recovery_scores(intensity_dict, print=False):
+    scores = {}
+    for workout, intensities in intensity_dict.items():
+        # Each Session I recover 1/14 of the total intensity
+        recovery_value = 1 / 14 * sum(intensities)
+        fatigue_list = [0] * 14
+        for _ in range(2):
+            for i, x in enumerate(intensities):
+                fatigue_list[i] = fatigue_list[i - 1] - x
+                if fatigue_list[i] < 0:
+                    fatigue_list[i] += recovery_value
+                if fatigue_list[i] > 0:
+                    fatigue_list[i] = 0
+        scores[workout] = fatigue_list
+    return scores
+
+
+def plan_score(plan, return_dict=False):
+    # initialize intensity_dict with the total intensity
+    intensity_dict = {}
+
+    # Iterate over the days of week
+    for i, day in enumerate(plan.values()):
+        for j, session in enumerate(["AM", "PM"]):
+            if day[session]["type"] not in intensity_dict.keys():
+                intensity_dict[day[session]["type"]] = [0] * 14
+            # Add the intensities to their respective lists
+            intensity_dict[day[session]["type"]][2 * i + j] += day[session]["intensity"]
+
+    scores = recovery_scores(intensity_dict)
+
+    if return_dict:
+        return scores
+    else:
+        return sum(min(scores[x]) for x in scores.keys())
 
 
 def check_valid_plan(week_plan, working_dict):
@@ -369,13 +389,52 @@ def find_most_spaced_strings_matrix(strings_lists):
     return best_list
 
 
+from tabulate import tabulate
+
+
+def pretty_print_table(schedule):
+    # Create a list of time slots
+    time_slots = ["AM", "PM"]
+
+    # Retrieve the days from the dictionary
+    days = list(schedule.keys())
+
+    # Create a list to store the rows of the table
+    rows = []
+
+    # Create a list for the day headers, including type
+    day_headers = [f'{day} ({schedule[day]["DAY_TYPE"]})' for day in days]
+
+    # Iterate over the time slots
+    for time_slot in time_slots:
+        # Create a row for the current time slot
+        row = [time_slot]
+
+        # Iterate over the days of the week
+        for day in days:
+            # Get the activity for the current day and time slot
+            activity = schedule[day].get(time_slot, "N/A")
+            # Create a string representation of the activity
+            activity_str = (
+                f'{activity["type"]} {activity["name"]} ({activity["intensity"]})'
+            )
+            # Add the string representation of the activity to the row
+            row.append(activity_str)
+
+        # Add the row to the table rows
+        rows.append(row)
+
+    # Print the table using tabulate
+    print(tabulate(rows, headers=["Time slot"] + day_headers))
+
+
 if __name__ == "__main__":
     r = Requirements()
     # Hockey Training
     r.add_fixed_event("TUE", "PM", "Hockey", "Training", "150")
-    r.add_fixed_event("WED", "PM", "Hockey", "Training", "100")
+    # r.add_fixed_event("WED", "PM", "Hockey", "Training", "80")
     r.add_fixed_event("THU", "PM", "Hockey", "Training", "150")
-    r.add_fixed_event("THU", "PM", "Hockey", "Training", "100")
+    r.add_fixed_event("SAT", "PM", "Hockey", "Game", "250")
     # Park Run
     r.add_fixed_event("SAT", "AM", "Run", "Parkrun", "50")
 
@@ -393,12 +452,15 @@ if __name__ == "__main__":
 
     # Rules
     r.add_rule("Only One Run per Day")
-    r.add_rule("space out my easy days")
 
     # Day types
-    r.add_day_type("Training", "6", "300")
+    r.add_day_type("Training", "5", "200")
+    r.add_day_type("Game", "1", "300")
+    r.add_day_type("Prep", "1", "100")
     s = build_schedule(r)
+    f = plan_score(s, True)
+    training_load = r.weekly_threshold / 7
+    total_fatigue = sum(np.array(x) for x in f.values())
 
-    get_intentsities(s[0])
-    get_intentsities(s[1])
-    print(json.dumps(s, indent=2))
+    print(json.dumps(f, indent=2))
+    pretty_print_table(s)
