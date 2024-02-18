@@ -232,38 +232,29 @@ def build_schedule(reqs: Requirements, fitness=None, starting_fatigue=0):
     if len(legal_plans) == 0:
         raise Exception("No valid plans found")
     # We then want to maximise the spacing of intensity from each type
-    best_plan = max(legal_plans, key=lambda x: plan_score(x))
+    best_plan = max(legal_plans, key=lambda x: plan_score(x, fitness, starting_fatigue))
     return best_plan
 
 
-def by_type_recovery_scores(intensity_dict):
-    scores = {}
-    for workout, intensities in intensity_dict.items():
-        scores[workout] = calc_recovery_score(intensities)
-
-    return scores
-
-
-def calc_recovery_score(intensities: list, recovery_value=None, starting_fatigue=0):
+def calc_recovery_score(intensities: list, base_fitness, starting_fatigue=0):
     # Each Session I recover 1/14 of the total intensity
-    if not recovery_value:
-        recovery_value = 1 / 14 * sum(intensities)
-    fatigue_list = [-starting_fatigue] * 14
+    recovery_value = base_fitness / 2
+    fatigue_list = [starting_fatigue * 7] * 14
     for i, x in enumerate(intensities):
-        fatigue_list[i] = fatigue_list[i - 1] - x + recovery_value
-    return fatigue_list
+        fatigue_list[i] = fatigue_list[i - 1] + x - recovery_value
+    return [x / 7 for x in fatigue_list]
 
 
 def overall_recovery_score(intensity_dict, fitness, starting_fatigue):
     intensity_list = sum(np.array(list(intensity_dict.values())))
-    recovery_score = calc_recovery_score(intensity_list, fitness / 2, starting_fatigue)
+    recovery_score = calc_recovery_score(intensity_list, fitness, starting_fatigue)
     return recovery_score
 
 
 def check_valid_plan(plan, fitness, starting_fatigue):
     intensity_dict = calculate_intensity_dict(plan)
     recovery_score = overall_recovery_score(intensity_dict, fitness, starting_fatigue)
-    if min(recovery_score) < -fitness:
+    if max(recovery_score) > 40:
         return False
     else:
         return True
@@ -283,14 +274,10 @@ def calculate_intensity_dict(plan):
     return intensity_dict
 
 
-def plan_score(plan, return_dict=False):
-    # initialize intensity_dict with the total intensity
+def plan_score(plan, fitness, starting_fatigue):
     intensity_dict = calculate_intensity_dict(plan)
-    scores = by_type_recovery_scores(intensity_dict)
-    if return_dict:
-        return scores
-    else:
-        return sum(min(scores[x]) for x in scores.keys())
+    recovery_score = overall_recovery_score(intensity_dict, fitness, starting_fatigue)
+    return max(recovery_score)
 
 
 def pretty_print_table(schedule):
@@ -333,32 +320,33 @@ if __name__ == "__main__":
     r = Requirements()
     # Hockey Training
     r.add_fixed_event("TUE", "PM", "Hockey", "Training", "150")
-    r.add_fixed_event("WED", "PM", "Hockey", "Training", "80")
+    # r.add_fixed_event("WED", "PM", "Hockey", "Training", "40")
     r.add_fixed_event("THU", "PM", "Hockey", "Training", "150")
-    r.add_fixed_event("SUN", "PM", "Hockey", "Game", "100")
+    # r.add_fixed_event("SUN", "PM", "Hockey", "Training", "100")
     # Park Run
-    r.add_fixed_event("SAT", "AM", "Run", "Parkrun", "50")
+    r.add_fixed_event("SAT", "AM", "Run", "Parkrun", "75")
 
     # Additional runs
     r.add_additional_event("Run", "Intervals", "150")
-    r.add_additional_event("Run", "Tempo", "100")
-    r.add_additional_event("Run", "Long", "200")
-    r.add_additional_event("Run", "Recovery", "50")
-    r.add_additional_event("Run", "Recovery", "50")
+    r.add_additional_event("Run", "Tempo", "110")
+    r.add_additional_event("Run", "Long", "170")
+    r.add_additional_event("Run", "Easy", "100")
 
     # Strength
-    r.add_additional_event("Strength", "Full Body Lift", "30")
-    r.add_additional_event("Strength", "Full Body Lift", "30")
-    r.add_additional_event("Strength", "Full Body Lift", "30")
+    r.add_additional_event("Strength", "Full Body Lift", "40")
+    r.add_additional_event("Strength", "Full Body Lift", "40")
+    r.add_additional_event("Strength", "Full Body Lift", "40")
 
     # Rules
     r.add_rule("Only One Run per Day")
 
     # Day types
-    s = build_schedule(r, fitness=170, starting_fatigue=0)
-    f = plan_score(s, True)
-    training_load = r.weekly_threshold / 7
-    total_fatigue = sum(np.array(x) for x in f.values())
+    starting_fatigue = -7
+    fitness = 122
 
-    print(json.dumps(f, indent=2))
+    s = build_schedule(r, fitness=fitness, starting_fatigue=starting_fatigue)
+    overall_recovery_score(
+        calculate_intensity_dict(s), fitness=fitness, starting_fatigue=starting_fatigue
+    )
+
     pretty_print_table(s)
