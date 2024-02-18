@@ -1,4 +1,5 @@
 #! python3
+from tabulate import tabulate
 from openai import OpenAI
 import itertools
 import json
@@ -178,10 +179,12 @@ class Requirements:
             raise Exception(f"Not enough events allocated for {self.events} events")
 
 
-def build_schedule(reqs: Requirements):
+def build_schedule(reqs: Requirements, fitness=None, starting_fatigue=0):
+
+    if fitness is None:
+        fitness = reqs.weekly_threshold / 7
+
     working_dict = deepcopy(reqs.prompt_dict["fixed_events"])
-    days = map_day_types(reqs)
-    day_types = reqs.prompt_dict["schedule"]
     to_assign = []
 
     for key, list_dicts in reqs.prompt_dict["additional_events"].items():
@@ -190,10 +193,6 @@ def build_schedule(reqs: Requirements):
             to_assign.append(dic)
 
     to_assign = sorted(to_assign, key=lambda x: x["intensity"], reverse=True)
-
-    for i, k in enumerate(working_dict.keys()):
-        working_dict[k]["DAY_TYPE"] = days[i]
-        working_dict[k]["THRESHOLD"] = day_types[days[i]]["limit"]
 
     # Create list to hold all legal plans
     legal_plans = []
@@ -227,7 +226,7 @@ def build_schedule(reqs: Requirements):
             week_plan[day][time_of_day] = activity
 
         # Check if this plan exceeds any thresholds, if not add it to legal plans
-        if check_valid_plan(week_plan, working_dict):
+        if check_valid_plan(week_plan, fitness, starting_fatigue):
             legal_plans.append(week_plan)
 
     if len(legal_plans) == 0:
@@ -237,24 +236,40 @@ def build_schedule(reqs: Requirements):
     return best_plan
 
 
-def recovery_scores(intensity_dict, print=False):
+def by_type_recovery_scores(intensity_dict):
     scores = {}
     for workout, intensities in intensity_dict.items():
-        # Each Session I recover 1/14 of the total intensity
-        recovery_value = 1 / 14 * sum(intensities)
-        fatigue_list = [0] * 14
-        for _ in range(2):
-            for i, x in enumerate(intensities):
-                fatigue_list[i] = fatigue_list[i - 1] - x
-                if fatigue_list[i] < 0:
-                    fatigue_list[i] += recovery_value
-                if fatigue_list[i] > 0:
-                    fatigue_list[i] = 0
-        scores[workout] = fatigue_list
+        scores[workout] = calc_recovery_score(intensities)
+
     return scores
 
 
-def plan_score(plan, return_dict=False):
+def calc_recovery_score(intensities: list, recovery_value=None, starting_fatigue=0):
+    # Each Session I recover 1/14 of the total intensity
+    if not recovery_value:
+        recovery_value = 1 / 14 * sum(intensities)
+    fatigue_list = [-starting_fatigue] * 14
+    for i, x in enumerate(intensities):
+        fatigue_list[i] = fatigue_list[i - 1] - x + recovery_value
+    return fatigue_list
+
+
+def overall_recovery_score(intensity_dict, fitness, starting_fatigue):
+    intensity_list = sum(np.array(list(intensity_dict.values())))
+    recovery_score = calc_recovery_score(intensity_list, fitness / 2, starting_fatigue)
+    return recovery_score
+
+
+def check_valid_plan(plan, fitness, starting_fatigue):
+    intensity_dict = calculate_intensity_dict(plan)
+    recovery_score = overall_recovery_score(intensity_dict, fitness, starting_fatigue)
+    if min(recovery_score) < -fitness:
+        return False
+    else:
+        return True
+
+
+def calculate_intensity_dict(plan):
     # initialize intensity_dict with the total intensity
     intensity_dict = {}
 
@@ -265,131 +280,17 @@ def plan_score(plan, return_dict=False):
                 intensity_dict[day[session]["type"]] = [0] * 14
             # Add the intensities to their respective lists
             intensity_dict[day[session]["type"]][2 * i + j] += day[session]["intensity"]
+    return intensity_dict
 
-    scores = recovery_scores(intensity_dict)
 
+def plan_score(plan, return_dict=False):
+    # initialize intensity_dict with the total intensity
+    intensity_dict = calculate_intensity_dict(plan)
+    scores = by_type_recovery_scores(intensity_dict)
     if return_dict:
         return scores
     else:
         return sum(min(scores[x]) for x in scores.keys())
-
-
-def check_valid_plan(week_plan, working_dict):
-    for day, activities in week_plan.items():
-        day_count = int(activities["AM"]["intensity"]) + int(
-            activities["PM"]["intensity"]
-        )
-        if day_count > working_dict[day]["THRESHOLD"]:
-            return False
-    return True
-
-
-def set_of_dicts(L):
-    return [dict(s) for s in set(frozenset(d.items()) for d in L)]
-
-
-def get_intentsities(schedule, fill_value=0):
-    intensities = {k: 0 for k in schedule.keys()}
-    for key, day in schedule.items():
-        intensities[key] = 0
-        for session in ["AM", "PM"]:
-            if day[session] is not None:
-                intensities[key] += day[session]["intensity"]
-            else:
-                intensities[key] += fill_value
-    return intensities
-
-
-def map_day_types(reqs):
-    res = {
-        "MON": None,
-        "TUE": None,
-        "WED": None,
-        "THU": None,
-        "FRI": None,
-        "SAT": None,
-        "SUN": None,
-    }
-
-    day_types = deepcopy(reqs.prompt_dict["schedule"])
-
-    try:
-        multiplier = (
-            sum([int(x["count"]) * int(x["limit"]) for x in day_types.values()])
-            / reqs.weekly_threshold
-        )
-
-        for k in day_types.keys():
-            day_types[k]["limit"] /= multiplier
-    except ZeroDivisionError:
-        for k in day_types.keys():
-            day_types[k]["limit"] = 0
-
-    options = [k for k, x in day_types.items() for _ in range(x["count"])]
-    permutations_set = set(itertools.permutations(options))
-    permutations = [list(p) for p in permutations_set]
-
-    fixed = reqs.prompt_dict["fixed_events"]
-    allocated_intensity = [
-        int(y["intensity"]) for x in fixed.values() for y in x.values() if y is not None
-    ]
-    mean_remaining_session_intensity = (
-        reqs.weekly_threshold - sum(allocated_intensity)
-    ) / (14 - len(allocated_intensity))
-
-    intensities = list(
-        get_intentsities(fixed, mean_remaining_session_intensity).values()
-    )
-
-    std_deviations = [
-        np.std(
-            np.subtract([int(day_types[x]["limit"]) for x in permutation], intensities)
-        )
-        for permutation in permutations
-    ]
-    min_std = min(std_deviations)
-    indices = [i for i, std in enumerate(std_deviations) if std == min_std]
-
-    possible_sols = [permutations[i] for i in indices]
-
-    sol = find_most_spaced_strings_matrix(possible_sols)
-
-    for i, x in enumerate(res):
-        res[x] = sol[i]
-
-    return sol
-
-
-def calculate_spacing(strings):
-    indexes = {c: [] for c in strings}
-    for i, c in enumerate(strings):
-        indexes[c].append(i)
-
-    min_distances = []
-    for char, char_indexes in indexes.items():
-        char_indexes.append(
-            char_indexes[0] + len(strings)
-        )  # to better handle repetitions at the beginning and end
-        min_distance = min(b - a for a, b in zip(char_indexes, char_indexes[1:]))
-        min_distances.append(min_distance)
-
-    return sum(min_distances)
-
-
-def find_most_spaced_strings_matrix(strings_lists):
-    best_list = None
-    best_distance = -1
-
-    for strings in strings_lists:
-        total_distance = calculate_spacing(strings)
-        if total_distance > best_distance:
-            best_distance = total_distance
-            best_list = strings
-
-    return best_list
-
-
-from tabulate import tabulate
 
 
 def pretty_print_table(schedule):
@@ -403,7 +304,7 @@ def pretty_print_table(schedule):
     rows = []
 
     # Create a list for the day headers, including type
-    day_headers = [f'{day} ({schedule[day]["DAY_TYPE"]})' for day in days]
+    day_headers = [f"{day}" for day in days]
 
     # Iterate over the time slots
     for time_slot in time_slots:
@@ -432,9 +333,9 @@ if __name__ == "__main__":
     r = Requirements()
     # Hockey Training
     r.add_fixed_event("TUE", "PM", "Hockey", "Training", "150")
-    # r.add_fixed_event("WED", "PM", "Hockey", "Training", "80")
+    r.add_fixed_event("WED", "PM", "Hockey", "Training", "80")
     r.add_fixed_event("THU", "PM", "Hockey", "Training", "150")
-    r.add_fixed_event("SAT", "PM", "Hockey", "Game", "250")
+    r.add_fixed_event("SUN", "PM", "Hockey", "Game", "100")
     # Park Run
     r.add_fixed_event("SAT", "AM", "Run", "Parkrun", "50")
 
@@ -454,10 +355,7 @@ if __name__ == "__main__":
     r.add_rule("Only One Run per Day")
 
     # Day types
-    r.add_day_type("Training", "5", "200")
-    r.add_day_type("Game", "1", "300")
-    r.add_day_type("Prep", "1", "100")
-    s = build_schedule(r)
+    s = build_schedule(r, fitness=170, starting_fatigue=0)
     f = plan_score(s, True)
     training_load = r.weekly_threshold / 7
     total_fatigue = sum(np.array(x) for x in f.values())
